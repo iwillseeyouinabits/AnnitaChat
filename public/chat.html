@@ -231,6 +231,98 @@
     let lastWordTime = null; // Track when the last word was detected
     let processingTimer = null; // Timer for processing after no new words
     
+    // IMPORTANT: Define audio processing functions early to avoid reference errors
+    
+    // Stop audio processing (completely disconnect and clean up)
+    function stopAudioProcessing() {
+      console.log("Stopping audio processing");
+      try {
+        if (scriptProcessor) {
+          scriptProcessor.removeEventListener('audioprocess', analyzeAudio);
+          scriptProcessor.disconnect();
+        }
+        
+        if (analyser) {
+          analyser.disconnect();
+        }
+        
+        if (microphone) {
+          microphone.disconnect();
+        }
+        
+        console.log("Audio processing stopped");
+      } catch (e) {
+        console.error("Error stopping audio processing:", e);
+      }
+    }
+    
+    // Start audio processing (reconnect everything)
+    function startAudioProcessing() {
+      console.log("Starting audio processing");
+      
+      if (!audioContext || audioContext.state === 'closed') {
+        // Need to reinitialize if it was closed
+        console.log("Audio context closed, reinitializing");
+        initAudioProcessing().then(() => {
+          console.log("Audio processing reinitialized");
+        }).catch(error => {
+          console.error("Failed to reinitialize audio processing:", error);
+        });
+        return;
+      }
+      
+      if (microphone && analyser && scriptProcessor) {
+        try {
+          microphone.connect(analyser);
+          analyser.connect(scriptProcessor);
+          scriptProcessor.connect(audioContext.destination);
+          
+          // Make sure event listener is attached
+          scriptProcessor.removeEventListener('audioprocess', analyzeAudio);
+          scriptProcessor.addEventListener('audioprocess', analyzeAudio);
+          
+          console.log("Audio processing reconnected");
+        } catch (e) {
+          console.error("Error connecting audio nodes:", e);
+          
+          // Try to reinitialize on error
+          setTimeout(() => {
+            if (isConnected && !isSpeaking) {
+              initAudioProcessing();
+            }
+          }, 300);
+        }
+      } else {
+        console.log("Audio nodes missing, reinitializing");
+        // Missing components, reinitialize
+        initAudioProcessing();
+      }
+    }
+    
+    // Clean up audio processing
+    function cleanupAudioProcessing() {
+      if (scriptProcessor) {
+        scriptProcessor.removeEventListener('audioprocess', analyzeAudio);
+        scriptProcessor.disconnect();
+        scriptProcessor = null;
+      }
+      
+      if (analyser) {
+        analyser.disconnect();
+        analyser = null;
+      }
+      
+      if (microphone) {
+        microphone.disconnect();
+        microphone = null;
+      }
+      
+      if (audioContext && audioContext.state !== 'closed') {
+        audioContext.close();
+        audioContext = null;
+      }
+    }
+    
     // DOM Elements
     const backButton = document.getElementById('backButton');
     const micBtn = document.getElementById('micBtn');
@@ -300,7 +392,11 @@
       }
       
       // Completely stop audio processing to prevent picking up AI's voice
-      stopAudioProcessing();
+      try {
+        stopAudioProcessing();
+      } catch (e) {
+        console.error("Error in onplay stopping audio:", e);
+      }
       
       // Update visual state
       updateVisualState();
@@ -333,11 +429,23 @@
           if (isConnected && !isSpeaking) {
             console.log("Restarting audio processing and recognition");
             
-            // Start audio processing first
-            startAudioProcessing();
-            
-            // Then start recognition
-            startRecognition();
+            try {
+              // Start audio processing first
+              startAudioProcessing();
+              
+              // Then start recognition
+              startRecognition();
+            } catch (e) {
+              console.error("Error restarting after speech:", e);
+              // Try to recover by reinitializing
+              setTimeout(() => {
+                if (isConnected && !isSpeaking) {
+                  initAudioProcessing().then(() => {
+                    startRecognition();
+                  });
+                }
+              }, 500);
+            }
           }
         }, 200); // Short delay
       } else {
@@ -532,8 +640,18 @@
     
     // Helper function to start recognition
     function startRecognition() {
-      if (!recognition || !isConnected || isSpeaking) {
-        console.log(`Cannot start recognition: recognition exists: ${!!recognition}, connected: ${isConnected}, speaking: ${isSpeaking}`);
+      if (!recognition) {
+        console.error("Recognition object is not initialized");
+        return;
+      }
+      
+      if (!isConnected) {
+        console.log("Cannot start recognition: not connected");
+        return;
+      }
+      
+      if (isSpeaking) {
+        console.log("Cannot start recognition: currently speaking");
         return;
       }
       
@@ -549,20 +667,30 @@
         // Check if already running before starting
         if (isRecording) {
           console.log("Recognition already running, stopping first");
-          recognition.stop();
-          // Restart after brief delay
-          setTimeout(() => {
-            if (isConnected && !isSpeaking) {
-              recognition.start();
-              console.log("Recognition restarted");
-            }
-          }, 100);
+          try {
+            recognition.stop();
+            // Restart after brief delay
+            setTimeout(() => {
+              if (isConnected && !isSpeaking) {
+                recognition.start();
+                console.log("Recognition restarted");
+              }
+            }, 100);
+          } catch (stopError) {
+            console.error("Error stopping recognition:", stopError);
+            // Try to recover by reinitializing
+            setTimeout(() => {
+              if (isConnected && !isSpeaking) {
+                recognition.start();
+              }
+            }, 300);
+          }
         } else {
           recognition.start();
           console.log("Recognition started");
         }
       } catch (e) {
-        console.log('Recognition error:', e);
+        console.error('Recognition error:', e);
         
         // If already started, stop and restart after a delay
         if (e.message && e.message.includes('already started')) {
@@ -682,6 +810,7 @@
     
     // Initialize audio context and set up audio processing for noise detection
     async function initAudioProcessing() {
+      console.log("Initializing audio processing");
       try {
         // Create audio context
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -706,6 +835,7 @@
         // Process audio data
         scriptProcessor.addEventListener('audioprocess', analyzeAudio);
         
+        console.log("Audio processing initialized successfully");
         return true;
       } catch (error) {
         console.error('Error setting up audio processing:', error);
