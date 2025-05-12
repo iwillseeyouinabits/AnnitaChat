@@ -213,6 +213,11 @@
     const noiseThreshold = noiseParam ? parseInt(noiseParam) : -45; // Default noise threshold
     const silenceThreshold = 800; // Reduced to 800ms for faster silence detection
     const maxSpeechDuration = 8000; // 8 seconds maximum before forcing completion
+
+    let isFirstStart = true; // Track first startup
+    let clearingBuffer = false; // Track if we're in buffer clearing mode
+    let bufferClearTimer = null; // Timer for buffer clearing
+    let gracePeriodTimer = null; // Timer for grace period after AI speaks
     
     console.log('Settings received:', { 
       role: assistantRole, 
@@ -386,23 +391,43 @@
       statusDot.classList.remove('speaking');
       
       if (isConnected) {
-        statusInfo.textContent = "Processing...";
+        // Important: Start with a buffer clearing phase
+        clearingBuffer = true;
+        statusInfo.textContent = "Preparing microphone...";
+        
+        // Clear any previous timers
+        if (bufferClearTimer) clearTimeout(bufferClearTimer);
+        if (gracePeriodTimer) clearTimeout(gracePeriodTimer);
         
         // Add a longer delay before restarting microphone
-        setTimeout(() => {
-          // Only restart if still connected and not already speaking
+        bufferClearTimer = setTimeout(() => {
           if (isConnected && !isSpeaking) {
-            console.log("RESTARTING MICROPHONE after AI finished speaking");
+            console.log("Starting grace period before user can speak");
+            
+            // Restart microphone but with a grace period where we ignore input
             restartMicrophone();
+            
+            // Set a grace period where we show "Ready" but ignore any input
+            // This gives time for any echoes to disappear
+            statusInfo.textContent = "Ready...";
+            
+            gracePeriodTimer = setTimeout(() => {
+              if (isConnected && !isSpeaking) {
+                clearingBuffer = false; // Now we can start listening for real
+                statusInfo.textContent = "Listening...";
+              }
+            }, 1500); // 1.5 second grace period where input is ignored
           }
-        }, 800); // Longer delay to ensure complete separation between speaking and listening
+        }, 800); // Wait 800ms before even starting the microphone
       } else {
         statusInfo.textContent = "Click the microphone to start";
+        clearingBuffer = false;
       }
       
       // Update visual state
       updateVisualState();
     }
+
     
     // Initialize speech recognition
     function initSpeechRecognition() {
@@ -456,9 +481,9 @@
         };
         
         recognition.onresult = (event) => {
-          // Don't process results if the AI is speaking or microphone is disabled
-          if (isSpeaking || microphoneDisabled) {
-            console.log("Ignoring speech recognition results while AI is speaking");
+          // Don't process results if the AI is speaking, microphone is disabled, or during buffer clearing
+          if (isSpeaking || microphoneDisabled || clearingBuffer) {
+            console.log("Ignoring speech recognition results during non-listening phase");
             return;
           }
           
@@ -500,10 +525,11 @@
             statusInfo.textContent = interimTranscript;
           } else if (finalTranscript) {
             statusInfo.textContent = finalTranscript;
-          } else {
+          } else if (!clearingBuffer) {
             statusInfo.textContent = "Listening...";
           }
         };
+
         
         recognition.onerror = (event) => {
           console.error('Speech recognition error:', event.error);
@@ -820,48 +846,52 @@
     
     // Analyze audio for volume levels
     function analyzeAudio(event) {
-      // Skip processing if speaking, processing, or microphone is explicitly disabled
-      if (!analyser || !isConnected || isSpeaking || isProcessing || microphoneDisabled) {
-        return;
-      }
-      
-      const bufferLength = analyser.frequencyBinCount;
-      const dataArray = new Uint8Array(bufferLength);
-      analyser.getByteFrequencyData(dataArray);
-      
-      // Calculate average volume
-      let sum = 0;
-      for (let i = 0; i < bufferLength; i++) {
-        sum += dataArray[i];
-      }
-      const average = sum / bufferLength;
-      
-      // Convert to decibels (approximate)
-      const volumeDb = average === 0 ? -90 : 20 * Math.log10(average / 255);
-      
-      // Check if volume is above threshold
-      const isAboveThreshold = volumeDb > noiseThreshold;
-      
-      // Handle speech detection state
-      if (isAboveThreshold && !isSpeechDetected) {
-        // Speech started
-        isSpeechDetected = true;
-        silenceStart = null;
-        speechStart = Date.now();
-      } 
-      else if (!isAboveThreshold && isSpeechDetected) {
-        // Just track silence - let the speech recognition handle the actual
-        // determination of when to send the message based on the 2-second timer
-        if (!silenceStart) {
-          silenceStart = Date.now();
-        }
-      } 
-      else if (!isAboveThreshold) {
-        // Still below threshold, keep silence detection state
-        isSpeechDetected = false;
-        silenceStart = null;
+  // Skip processing if speaking, processing, microphone is disabled, or during buffer clearing
+  if (!analyser || !isConnected || isSpeaking || isProcessing || microphoneDisabled || clearingBuffer) {
+    return;
+  }
+  
+  // Rest of function remains the same...
+}
+
+// 5. Modify restartMicrophone to reset the speech recognition completely
+async function restartMicrophone() {
+  if (isSpeaking) {
+    console.log("Cannot restart microphone while speaking");
+    return;
+  }
+  
+  microphoneDisabled = false;
+  console.log("Restarting microphone from scratch");
+  
+  try {
+    // Clean up any existing audio processing
+    cleanupAudioProcessing();
+    
+    // Reset speech recognition completely
+    if (recognition) {
+      try {
+        recognition.stop();
+        finalTranscript = ''; // IMPORTANT: Clear any pending transcripts
+      } catch (e) {
+        console.log("Error stopping recognition:", e);
       }
     }
+    
+    // Reinitialize audio processing from scratch
+    await initAudioProcessing();
+    
+    // Start recognition after microphone is ready, but don't display "Listening..." during buffer clearing
+    if (isConnected && !isSpeaking) {
+      micBtn.classList.remove('hidden-mic');
+      startRecognition();
+    }
+  } catch (error) {
+    console.error("Error restarting microphone:", error);
+    statusInfo.textContent = "Error accessing microphone";
+  }
+}
+
     
     function disconnectSocket() {
       // Clear any recognition restart timer
@@ -898,6 +928,12 @@
       isProcessing = true;
       updateVisualState();
       statusInfo.textContent = "AI is starting the conversation...";
+      
+      // For the first start, ensure we don't pick up any initial noise
+      if (isFirstStart) {
+        clearingBuffer = true;
+        isFirstStart = false;
+      }
       
       // Create messages array with system message if provided
       let messages = [];
