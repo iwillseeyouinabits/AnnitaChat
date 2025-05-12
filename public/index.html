@@ -143,22 +143,6 @@
         </div>
         <div class="setting-description">Select the voice for the AI's responses</div>
       </div>
-      <div class="setting-group">
-        <div class="setting-label">Noise Threshold</div>
-        <div class="slider-container">
-          <input 
-            type="range" 
-            min="-65" 
-            max="-15" 
-            value="-45" 
-            class="slider" 
-            id="noiseSlider" 
-            step="1"
-          >
-          <div class="slider-value" id="noiseValue">-45 dB</div>
-        </div>
-        <div class="setting-description">Set the minimum volume level to detect speech (lower values pick up quieter sounds)</div>
-      </div>
     
     <button id="startButton" class="start-button">Start Conversation</button>
   </div>
@@ -167,29 +151,18 @@
     const startButton = document.getElementById('startButton');
     const roleInput = document.getElementById('roleInput');
     const voiceSelect = document.getElementById('voiceSelect');
-    const noiseSlider = document.getElementById('noiseSlider');
-    const noiseValue = document.getElementById('noiseValue');
-    
-    // Update noise threshold display
-    noiseSlider.addEventListener('input', () => {
-      const noiseThreshold = parseInt(noiseSlider.value);
-      noiseValue.textContent = noiseThreshold + ' dB';
-    });
     
     // Handle form submission
     startButton.addEventListener('click', () => {
       // Get values
       const role = encodeURIComponent(roleInput.value.trim());
       const voice = encodeURIComponent(voiceSelect.value);
-      const noiseThreshold = noiseSlider.value;
       
       // Save to local storage as a backup
       localStorage.setItem('assistant_role', roleInput.value.trim());
       localStorage.setItem('assistant_voice', voiceSelect.value);
-      localStorage.setItem('noise_threshold', noiseThreshold);
-      
       // Create the URL with parameters
-      const url = `chat.html?role=${role}&voice=${voice}&noise=${noiseThreshold}`;
+      const url = `chat.html?role=${role}&voice=${voice}`;
       
       // Navigate to the chat page
       window.location.href = url;
@@ -199,14 +172,9 @@
     window.addEventListener('DOMContentLoaded', () => {
       const savedRole = localStorage.getItem('assistant_role');
       const savedVoice = localStorage.getItem('assistant_voice');
-      const savedNoise = localStorage.getItem('noise_threshold');
       
       if (savedRole) roleInput.value = savedRole;
       if (savedVoice) voiceSelect.value = savedVoice;
-      if (savedNoise) {
-        noiseSlider.value = savedNoise;
-        noiseValue.textContent = parseInt(savedNoise) + ' dB';
-      }
     });
   </script>
 </body>

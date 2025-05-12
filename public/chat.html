@@ -249,19 +249,16 @@
     const micBtn = document.getElementById('micBtn');
     const statusDot = document.getElementById('statusDot');
     const statusInfo = document.getElementById('statusInfo');
-    const wakeWordIndicator = document.getElementById('wakeWordIndicator');
     const connectingOverlay = document.getElementById('connectingOverlay');
     
     // State variables
     let socket;
     let recognition;
-    let wakeWordRecognition; // For wake word detection
     let audioPlayer = new Audio();
     let isConnected = false;
     let isRecording = false;
     let isSpeaking = false;
     let isProcessing = false;
-    let isListeningForWakeWord = false; // Wake word detection state
     let finalTranscript = '';
     let silenceTimer = null;
     let recognitionRestartTimer = null;
@@ -282,7 +279,7 @@
     // Update the visual state to match the current status
     function updateVisualState() {
       // Remove all state classes first
-      micBtn.classList.remove('recording', 'speaking', 'processing', 'wake-word-listening');
+      micBtn.classList.remove('recording', 'speaking', 'processing');
       
       // Update emoji based on state
       if (isSpeaking) {
@@ -294,9 +291,6 @@
       } else if (isRecording) {
         micBtn.textContent = '🎤'; // Microphone emoji
         micBtn.classList.add('recording');
-      } else if (isListeningForWakeWord) {
-        micBtn.textContent = '👂'; // Ear emoji for wake word listening
-        micBtn.classList.add('wake-word-listening');
       } else {
         micBtn.textContent = '🎤'; // Default microphone emoji
       }
@@ -318,8 +312,8 @@
         }
       }
       
-      // Pause audio processing to prevent picking up AI's voice
-      pauseAudioProcessing();
+      // Completely stop audio processing to prevent picking up AI's voice
+      stopAudioProcessing();
       
       // Update visual state
       updateVisualState();
@@ -332,12 +326,20 @@
       if (isConnected) {
         statusInfo.textContent = "Listening...";
         
-        // Resume audio processing after AI finishes speaking
-        resumeAudioProcessing();
-        
-        // Start recognition again after AI finishes speaking if we're connected
-        if (!isRecording) {
-          startRecognition();
+        // Only resume audio processing and recognition when completely finished speaking
+        if (audioPlayer.paused || audioPlayer.ended) {
+          setTimeout(() => {
+            // Double-check we're still not speaking before restarting
+            if (!isSpeaking && isConnected) {
+              // Resume audio processing after AI finishes speaking
+              startAudioProcessing();
+              
+              // Start recognition again after AI finishes speaking if we're connected
+              if (!isRecording) {
+                startRecognition();
+              }
+            }
+          }, 500); // Add a small delay to ensure everything is stopped
         }
       }
       
@@ -355,12 +357,6 @@
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
-        
-        // Wake word recognition
-        wakeWordRecognition = new SpeechRecognition();
-        wakeWordRecognition.continuous = false;
-        wakeWordRecognition.interimResults = false;
-        wakeWordRecognition.lang = 'en-US';
         
         // Set up regular recognition events
         recognition.onstart = () => {
@@ -563,9 +559,6 @@
     // Initialize speech recognition if browser supports it
     if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       initSpeechRecognition();
-      
-      // Start wake word detection immediately
-      startWakeWordDetection();
     } else {
       micBtn.disabled = true;
       statusInfo.textContent = "Speech recognition not supported";
@@ -586,9 +579,6 @@
     });
     
     function connectSocket() {
-      // Stop wake word detection since we're connecting
-      stopWakeWordDetection();
-      
       showConnectingOverlay(true);
       
       // Clear any existing connection
@@ -841,7 +831,7 @@
       isProcessing = false;
       statusDot.classList.remove('connected');
       statusDot.classList.remove('speaking');
-      statusInfo.textContent = "Click the microphone or say 'Hey Johnny' to start";
+      statusInfo.textContent = "Click the microphone to start";
       
       // Stop any ongoing speech
       if (isSpeaking) {
@@ -874,9 +864,6 @@
       
       // Update visual state
       updateVisualState();
-      
-      // Start wake word detection again
-      startWakeWordDetection();
     }
     
     function showConnectingOverlay(show) {
