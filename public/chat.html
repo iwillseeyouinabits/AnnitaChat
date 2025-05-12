@@ -133,19 +133,6 @@
       min-height: 20px;
     }
     
-    .wake-word-indicator {
-      text-align: center;
-      font-size: 14px;
-      color: #4285f4;
-      margin-top: 10px;
-      opacity: 0;
-      transition: opacity 0.3s;
-    }
-    
-    .wake-word-indicator.active {
-      opacity: 1;
-    }
-    
     .connecting-overlay {
       position: fixed;
       top: 0;
@@ -319,33 +306,47 @@
       updateVisualState();
     };
     
-    audioPlayer.onpause = audioPlayer.onended = () => {
+    audioPlayer.onended = () => {
+      console.log("Audio playback ended, restarting listening");
+      handleAudioEnded();
+    };
+    
+    audioPlayer.onpause = () => {
+      // Only handle if truly paused, not just temporarily buffering
+      if (audioPlayer.paused && !audioPlayer.seeking) {
+        console.log("Audio playback paused, restarting listening");
+        handleAudioEnded();
+      }
+    };
+    
+    // Separate function to handle when audio ends or pauses
+    function handleAudioEnded() {
       isSpeaking = false;
       statusDot.classList.remove('speaking');
       
       if (isConnected) {
         statusInfo.textContent = "Listening...";
         
-        // Only resume audio processing and recognition when completely finished speaking
-        if (audioPlayer.paused || audioPlayer.ended) {
-          setTimeout(() => {
-            // Double-check we're still not speaking before restarting
-            if (!isSpeaking && isConnected) {
-              // Resume audio processing after AI finishes speaking
-              startAudioProcessing();
-              
-              // Start recognition again after AI finishes speaking if we're connected
-              if (!isRecording) {
-                startRecognition();
-              }
-            }
-          }, 500); // Add a small delay to ensure everything is stopped
-        }
+        // Short delay before restarting recognition
+        setTimeout(() => {
+          // Only restart if still connected and not already speaking
+          if (isConnected && !isSpeaking) {
+            console.log("Restarting audio processing and recognition");
+            
+            // Start audio processing first
+            startAudioProcessing();
+            
+            // Then start recognition
+            startRecognition();
+          }
+        }, 200); // Short delay
+      } else {
+        statusInfo.textContent = "Click the microphone to start";
       }
       
       // Update visual state
       updateVisualState();
-    };
+    }
     
     // Initialize speech recognition
     function initSpeechRecognition() {
@@ -359,22 +360,24 @@
         recognition.lang = 'en-US';
         
         // Set up regular recognition events
-        recognition.onstart = () => {
-          isRecording = true;
-          updateVisualState();
-          statusInfo.textContent = "Listening...";
-          
-          // Clear any pending send timeout
-          if (silenceTimer) {
-            clearTimeout(silenceTimer);
-          }
-          
-          // Clear any recognition restart timer
-          if (recognitionRestartTimer) {
-            clearTimeout(recognitionRestartTimer);
-            recognitionRestartTimer = null;
-          }
-        };
+    // Initialize speech recognition events
+    recognition.onstart = () => {
+      isRecording = true;
+      updateVisualState();
+      statusInfo.textContent = "Listening...";
+      console.log("Recognition officially started");
+      
+      // Clear any pending send timeout
+      if (silenceTimer) {
+        clearTimeout(silenceTimer);
+      }
+      
+      // Clear any recognition restart timer
+      if (recognitionRestartTimer) {
+        clearTimeout(recognitionRestartTimer);
+        recognitionRestartTimer = null;
+      }
+    };
         
         recognition.onend = () => {
           console.log("Recognition ended");
@@ -388,9 +391,10 @@
             // Only restart if we're not deliberately disconnecting
             recognitionRestartTimer = setTimeout(() => {
               if (isConnected && !isSpeaking) {
+                console.log("Auto-restarting recognition after it ended");
                 startRecognition();
               }
-            }, 300);
+            }, 200);
           } else if (!isConnected) {
             statusInfo.textContent = "Click the microphone to start";
           }
@@ -528,7 +532,10 @@
     
     // Helper function to start recognition
     function startRecognition() {
-      if (!recognition || !isConnected || isSpeaking) return;
+      if (!recognition || !isConnected || isSpeaking) {
+        console.log(`Cannot start recognition: recognition exists: ${!!recognition}, connected: ${isConnected}, speaking: ${isSpeaking}`);
+        return;
+      }
       
       try {
         // Clear any existing transcript and reset timers
@@ -539,19 +546,37 @@
         }
         lastWordTime = null;
         
-        recognition.start();
-        console.log("Recognition started");
+        // Check if already running before starting
+        if (isRecording) {
+          console.log("Recognition already running, stopping first");
+          recognition.stop();
+          // Restart after brief delay
+          setTimeout(() => {
+            if (isConnected && !isSpeaking) {
+              recognition.start();
+              console.log("Recognition restarted");
+            }
+          }, 100);
+        } else {
+          recognition.start();
+          console.log("Recognition started");
+        }
       } catch (e) {
         console.log('Recognition error:', e);
         
         // If already started, stop and restart after a delay
-        if (e.message.includes('already started')) {
-          recognition.stop();
-          setTimeout(() => {
-            if (isConnected && !isSpeaking) {
-              recognition.start();
-            }
-          }, 100);
+        if (e.message && e.message.includes('already started')) {
+          try {
+            recognition.stop();
+            setTimeout(() => {
+              if (isConnected && !isSpeaking) {
+                recognition.start();
+                console.log("Recognition restarted after error");
+              }
+            }, 100);
+          } catch (stopError) {
+            console.error("Error stopping recognition:", stopError);
+          }
         }
       }
     }
@@ -977,30 +1002,16 @@
           }
         }
         
-        if (isListeningForWakeWord && wakeWordRecognition) {
-          try {
-            stopWakeWordDetection();
-          } catch (e) {
-            console.log("Error stopping wake word detection:", e);
-          }
-        }
-        
         if (isSpeaking) {
           audioPlayer.pause();
         }
-      } else if (document.visibilityState === 'visible') {
-        // Page is visible again
-        if (isConnected) {
-          // Resume activities if connected
-          if (isSpeaking) {
-            audioPlayer.play();
-          } else if (!isRecording && !isSpeaking) {
-            // Restart recognition if not already recording and not speaking
-            startRecognition();
-          }
-        } else {
-          // Start wake word detection if not connected
-          startWakeWordDetection();
+      } else if (document.visibilityState === 'visible' && isConnected) {
+        // Page is visible again, resume activities if connected
+        if (isSpeaking) {
+          audioPlayer.play();
+        } else if (!isRecording && !isSpeaking) {
+          // Restart recognition if not already recording and not speaking
+          startRecognition();
         }
       }
     });
