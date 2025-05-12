@@ -89,6 +89,12 @@
       background-color: #fbbc05; /* Yellow when processing */
     }
     
+    .mic-button.wake-word-listening {
+      background-color: #9e9e9e; /* Gray when listening for wake word */
+      animation: pulse 3s infinite; /* Slower, more subtle pulse */
+      opacity: 0.8;
+    }
+    
     .mic-button.speaking {
       background-color: #ea4335; /* Red when speaking */
     }
@@ -125,6 +131,19 @@
       text-align: center;
       margin-top: 20px;
       min-height: 20px;
+    }
+    
+    .wake-word-indicator {
+      text-align: center;
+      font-size: 14px;
+      color: #4285f4;
+      margin-top: 10px;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    
+    .wake-word-indicator.active {
+      opacity: 1;
     }
     
     .connecting-overlay {
@@ -183,6 +202,7 @@
     </div>
     
     <div id="statusInfo" class="status-info">Click the microphone to start</div>
+    <div id="wakeWordIndicator" class="wake-word-indicator">Say "Hey Johnny" to activate</div>
   </div>
   
   <div class="connecting-overlay" id="connectingOverlay">
@@ -204,7 +224,8 @@
     const assistantRole = roleParam ? decodeURIComponent(roleParam) : '';
     const voiceId = voiceParam ? decodeURIComponent(voiceParam) : '21m00Tcm4TlvDq8ikWAM'; // Default to Rachel
     const noiseThreshold = noiseParam ? parseInt(noiseParam) : -45; // Default noise threshold
-    const silenceThreshold = 1500; // Default 1.5 seconds for silence detection
+    const silenceThreshold = 800; // Reduced to 800ms for faster silence detection
+    const maxSpeechDuration = 8000; // 8 seconds maximum before forcing completion
     
     console.log('Settings received:', { 
       role: assistantRole, 
@@ -219,22 +240,28 @@
     let scriptProcessor;
     let isSpeechDetected = false;
     let silenceStart = null;
+    let speechStart = null; // Track when speech began
+    let lastWordTime = null; // Track when the last word was detected
+    let processingTimer = null; // Timer for processing after no new words
     
     // DOM Elements
     const backButton = document.getElementById('backButton');
     const micBtn = document.getElementById('micBtn');
     const statusDot = document.getElementById('statusDot');
     const statusInfo = document.getElementById('statusInfo');
+    const wakeWordIndicator = document.getElementById('wakeWordIndicator');
     const connectingOverlay = document.getElementById('connectingOverlay');
     
     // State variables
     let socket;
     let recognition;
+    let wakeWordRecognition; // For wake word detection
     let audioPlayer = new Audio();
     let isConnected = false;
     let isRecording = false;
     let isSpeaking = false;
     let isProcessing = false;
+    let isListeningForWakeWord = false; // Wake word detection state
     let finalTranscript = '';
     let silenceTimer = null;
     let recognitionRestartTimer = null;
@@ -255,7 +282,7 @@
     // Update the visual state to match the current status
     function updateVisualState() {
       // Remove all state classes first
-      micBtn.classList.remove('recording', 'speaking', 'processing');
+      micBtn.classList.remove('recording', 'speaking', 'processing', 'wake-word-listening');
       
       // Update emoji based on state
       if (isSpeaking) {
@@ -267,6 +294,9 @@
       } else if (isRecording) {
         micBtn.textContent = '🎤'; // Microphone emoji
         micBtn.classList.add('recording');
+      } else if (isListeningForWakeWord) {
+        micBtn.textContent = '👂'; // Ear emoji for wake word listening
+        micBtn.classList.add('wake-word-listening');
       } else {
         micBtn.textContent = '🎤'; // Default microphone emoji
       }
@@ -319,11 +349,20 @@
     function initSpeechRecognition() {
       if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        
+        // Regular speech recognition
         recognition = new SpeechRecognition();
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
         
+        // Wake word recognition
+        wakeWordRecognition = new SpeechRecognition();
+        wakeWordRecognition.continuous = false;
+        wakeWordRecognition.interimResults = false;
+        wakeWordRecognition.lang = 'en-US';
+        
+        // Set up regular recognition events
         recognition.onstart = () => {
           isRecording = true;
           updateVisualState();
@@ -365,6 +404,15 @@
           let interimTranscript = '';
           let hadNewFinalResult = false;
           
+          // Update lastWordTime each time we get a result
+          lastWordTime = Date.now();
+          
+          // Clear any existing processing timer
+          if (processingTimer) {
+            clearTimeout(processingTimer);
+            processingTimer = null;
+          }
+          
           for (let i = event.resultIndex; i < event.results.length; i++) {
             const transcript = event.results[i][0].transcript;
             
@@ -375,6 +423,16 @@
               interimTranscript += transcript;
             }
           }
+          
+          // Set a new timer to process after 2 seconds of no new words
+          processingTimer = setTimeout(() => {
+            if (finalTranscript.trim()) {
+              console.log("No new words for 2 seconds, processing message");
+              sendMessage(finalTranscript);
+              finalTranscript = '';
+              lastWordTime = null;
+            }
+          }, 2000);
           
           // Display current speech in status info
           if (interimTranscript) {
@@ -425,12 +483,66 @@
       }
     }
     
+    // Start wake word detection
+    function startWakeWordDetection() {
+      if (!wakeWordRecognition) return;
+      
+      try {
+        isListeningForWakeWord = true;
+        wakeWordIndicator.classList.add('active');
+        
+        // Update the visual state to show we're listening for wake word
+        updateVisualState();
+        
+        wakeWordRecognition.start();
+        console.log("Wake word detection started");
+      } catch (e) {
+        console.log('Wake word detection error:', e);
+        
+        // If already started, retry after a short delay
+        if (e.message.includes('already started')) {
+          try {
+            wakeWordRecognition.stop();
+          } catch (stopErr) {
+            console.log("Error stopping wake word detection:", stopErr);
+          }
+          
+          setTimeout(() => {
+            if (!isConnected) {
+              startWakeWordDetection();
+            }
+          }, 300);
+        }
+      }
+    }
+    
+    // Stop wake word detection
+    function stopWakeWordDetection() {
+      if (!wakeWordRecognition) return;
+      
+      try {
+        isListeningForWakeWord = false;
+        wakeWordIndicator.classList.remove('active');
+        wakeWordRecognition.stop();
+        console.log("Wake word detection stopped");
+      } catch (e) {
+        console.log('Error stopping wake word detection:', e);
+      }
+    }
+    
     // Helper function to start recognition
     function startRecognition() {
       if (!recognition || !isConnected || isSpeaking) return;
       
       try {
+        // Clear any existing transcript and reset timers
         finalTranscript = '';
+        if (processingTimer) {
+          clearTimeout(processingTimer);
+          processingTimer = null;
+        }
+        lastWordTime = null;
+        
         recognition.start();
         console.log("Recognition started");
       } catch (e) {
@@ -451,6 +563,9 @@
     // Initialize speech recognition if browser supports it
     if ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window) {
       initSpeechRecognition();
+      
+      // Start wake word detection immediately
+      startWakeWordDetection();
     } else {
       micBtn.disabled = true;
       statusInfo.textContent = "Speech recognition not supported";
@@ -471,6 +586,9 @@
     });
     
     function connectSocket() {
+      // Stop wake word detection since we're connecting
+      stopWakeWordDetection();
+      
       showConnectingOverlay(true);
       
       // Clear any existing connection
@@ -645,29 +763,17 @@
         // Speech started
         isSpeechDetected = true;
         silenceStart = null;
-        
-        // Optional: show volume level in status (for debugging)
-        // statusInfo.textContent = `Volume: ${volumeDb.toFixed(1)} dB`;
+        speechStart = Date.now();
       } 
       else if (!isAboveThreshold && isSpeechDetected) {
-        // Potential end of speech, start silence timer
+        // Just track silence - let the speech recognition handle the actual
+        // determination of when to send the message based on the 2-second timer
         if (!silenceStart) {
           silenceStart = Date.now();
-        } 
-        else if (Date.now() - silenceStart > silenceThreshold) {
-          // Silence duration exceeded threshold, trigger end of speech
-          isSpeechDetected = false;
-          silenceStart = null;
-          
-          // If we have transcribed text, send it after silence
-          if (finalTranscript.trim()) {
-            sendMessage(finalTranscript);
-            finalTranscript = '';
-          }
         }
       } 
       else if (!isAboveThreshold) {
-        // Still below threshold, reset speech detection
+        // Still below threshold, keep silence detection state
         isSpeechDetected = false;
         silenceStart = null;
       }
@@ -735,7 +841,7 @@
       isProcessing = false;
       statusDot.classList.remove('connected');
       statusDot.classList.remove('speaking');
-      statusInfo.textContent = "Click the microphone to start";
+      statusInfo.textContent = "Click the microphone or say 'Hey Johnny' to start";
       
       // Stop any ongoing speech
       if (isSpeaking) {
@@ -749,6 +855,11 @@
         silenceTimer = null;
       }
       
+      if (processingTimer) {
+        clearTimeout(processingTimer);
+        processingTimer = null;
+      }
+      
       // Clear any recognition restart timer
       if (recognitionRestartTimer) {
         clearTimeout(recognitionRestartTimer);
@@ -758,9 +869,14 @@
       // Reset audio processing state
       isSpeechDetected = false;
       silenceStart = null;
+      speechStart = null;
+      lastWordTime = null;
       
       // Update visual state
       updateVisualState();
+      
+      // Start wake word detection again
+      startWakeWordDetection();
     }
     
     function showConnectingOverlay(show) {
@@ -874,16 +990,30 @@
           }
         }
         
+        if (isListeningForWakeWord && wakeWordRecognition) {
+          try {
+            stopWakeWordDetection();
+          } catch (e) {
+            console.log("Error stopping wake word detection:", e);
+          }
+        }
+        
         if (isSpeaking) {
           audioPlayer.pause();
         }
-      } else if (document.visibilityState === 'visible' && isConnected) {
-        // Page is visible again, resume activities if connected
-        if (isSpeaking) {
-          audioPlayer.play();
-        } else if (!isRecording && !isSpeaking) {
-          // Restart recognition if not already recording and not speaking
-          startRecognition();
+      } else if (document.visibilityState === 'visible') {
+        // Page is visible again
+        if (isConnected) {
+          // Resume activities if connected
+          if (isSpeaking) {
+            audioPlayer.play();
+          } else if (!isRecording && !isSpeaking) {
+            // Restart recognition if not already recording and not speaking
+            startRecognition();
+          }
+        } else {
+          // Start wake word detection if not connected
+          startWakeWordDetection();
         }
       }
     });
