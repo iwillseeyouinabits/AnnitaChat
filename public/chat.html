@@ -85,6 +85,14 @@
       background-color: #34a853; /* Green when recording */
     }
     
+    .mic-button.processing {
+      background-color: #fbbc05; /* Yellow when processing */
+    }
+    
+    .mic-button.speaking {
+      background-color: #ea4335; /* Red when speaking */
+    }
+    
     @keyframes pulse {
       0% { transform: scale(1); }
       50% { transform: scale(1.05); opacity: 0.9; }
@@ -226,6 +234,7 @@
     let isConnected = false;
     let isRecording = false;
     let isSpeaking = false;
+    let isProcessing = false;
     let finalTranscript = '';
     let silenceTimer = null;
     let recognitionRestartTimer = null;
@@ -243,24 +252,67 @@
       window.location.href = 'index.html';
     });
     
+    // Update the visual state to match the current status
+    function updateVisualState() {
+      // Remove all state classes first
+      micBtn.classList.remove('recording', 'speaking', 'processing');
+      
+      // Update emoji based on state
+      if (isSpeaking) {
+        micBtn.textContent = '🗣️'; // Speaking emoji
+        micBtn.classList.add('speaking');
+      } else if (isProcessing) {
+        micBtn.textContent = '💭'; // Thinking emoji
+        micBtn.classList.add('processing');
+      } else if (isRecording) {
+        micBtn.textContent = '🎤'; // Microphone emoji
+        micBtn.classList.add('recording');
+      } else {
+        micBtn.textContent = '🎤'; // Default microphone emoji
+      }
+    }
+    
     // Audio player setup
     audioPlayer.onplay = () => {
       isSpeaking = true;
       statusDot.classList.add('speaking');
       statusInfo.textContent = "AI is speaking";
+      
+      // Completely stop speech recognition while AI is speaking
+      if (recognition) {
+        try {
+          recognition.stop();
+          isRecording = false;
+        } catch (e) {
+          console.log("Error stopping recognition:", e);
+        }
+      }
+      
+      // Pause audio processing to prevent picking up AI's voice
+      pauseAudioProcessing();
+      
+      // Update visual state
+      updateVisualState();
     };
     
     audioPlayer.onpause = audioPlayer.onended = () => {
       isSpeaking = false;
       statusDot.classList.remove('speaking');
+      
       if (isConnected) {
         statusInfo.textContent = "Listening...";
+        
+        // Resume audio processing after AI finishes speaking
+        resumeAudioProcessing();
+        
+        // Start recognition again after AI finishes speaking if we're connected
+        if (!isRecording) {
+          startRecognition();
+        }
       }
       
-      // Start recognition again after AI finishes speaking if we're connected
-      if (isConnected && !isRecording) {
-        startRecognition();
-      }
+      // Update visual state
+      updateVisualState();
     };
     
     // Initialize speech recognition
@@ -274,13 +326,8 @@
         
         recognition.onstart = () => {
           isRecording = true;
-          micBtn.classList.add('recording');
+          updateVisualState();
           statusInfo.textContent = "Listening...";
-          
-          // Pause any ongoing speech when user starts talking
-          if (isSpeaking) {
-            audioPlayer.pause();
-          }
           
           // Clear any pending send timeout
           if (silenceTimer) {
@@ -297,19 +344,19 @@
         recognition.onend = () => {
           console.log("Recognition ended");
           isRecording = false;
-          micBtn.classList.remove('recording');
+          updateVisualState();
           
-          // If still connected, restart recognition after a brief pause
-          if (isConnected) {
+          // If still connected and not speaking, restart recognition after a brief pause
+          if (isConnected && !isSpeaking) {
             statusInfo.textContent = "Restarting listening...";
             
             // Only restart if we're not deliberately disconnecting
             recognitionRestartTimer = setTimeout(() => {
-              if (isConnected) {
+              if (isConnected && !isSpeaking) {
                 startRecognition();
               }
             }, 300);
-          } else {
+          } else if (!isConnected) {
             statusInfo.textContent = "Click the microphone to start";
           }
         };
@@ -337,9 +384,6 @@
           } else {
             statusInfo.textContent = "Listening...";
           }
-          
-          // Note: We don't use a silence timer here anymore.
-          // The audio processing function handles detecting silence based on volume
         };
         
         recognition.onerror = (event) => {
@@ -352,7 +396,7 @@
           }
           
           isRecording = false;
-          micBtn.classList.remove('recording');
+          updateVisualState();
           
           // For network errors, we might need to reconnect
           if (event.error === 'network') {
@@ -363,11 +407,11 @@
             setTimeout(connectSocket, 2000);
           } else {
             // For other errors, try to restart recognition if still connected
-            if (isConnected) {
+            if (isConnected && !isSpeaking) {
               statusInfo.textContent = `Error: ${event.error}. Restarting...`;
               
               recognitionRestartTimer = setTimeout(() => {
-                if (isConnected) {
+                if (isConnected && !isSpeaking) {
                   startRecognition();
                 }
               }, 1000);
@@ -383,7 +427,7 @@
     
     // Helper function to start recognition
     function startRecognition() {
-      if (!recognition || !isConnected) return;
+      if (!recognition || !isConnected || isSpeaking) return;
       
       try {
         finalTranscript = '';
@@ -396,7 +440,7 @@
         if (e.message.includes('already started')) {
           recognition.stop();
           setTimeout(() => {
-            if (isConnected) {
+            if (isConnected && !isSpeaking) {
               recognition.start();
             }
           }, 100);
@@ -485,6 +529,8 @@
       
       socket.on('chat_error', (error) => {
         statusInfo.textContent = `Server error: ${error.message}`;
+        isProcessing = false;
+        updateVisualState();
       });
       
       socket.on('connect_error', () => {
@@ -527,6 +573,21 @@
       }
     }
     
+    // Pause audio processing (disconnect the script processor)
+    function pauseAudioProcessing() {
+      if (scriptProcessor) {
+        scriptProcessor.disconnect();
+      }
+    }
+    
+    // Resume audio processing (reconnect the script processor)
+    function resumeAudioProcessing() {
+      if (scriptProcessor && analyser && audioContext) {
+        scriptProcessor.connect(audioContext.destination);
+        analyser.connect(scriptProcessor);
+      }
+    }
+    
     // Clean up audio processing
     function cleanupAudioProcessing() {
       if (scriptProcessor) {
@@ -553,7 +614,7 @@
     
     // Analyze audio for volume levels
     function analyzeAudio(event) {
-      if (!analyser || !isConnected) return;
+      if (!analyser || !isConnected || isSpeaking) return;
       
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
@@ -634,9 +695,9 @@
     
     function handleDisconnection() {
       isConnected = false;
+      isProcessing = false;
       statusDot.classList.remove('connected');
       statusDot.classList.remove('speaking');
-      micBtn.classList.remove('recording');
       statusInfo.textContent = "Click the microphone to start";
       
       // Stop any ongoing speech
@@ -660,6 +721,9 @@
       // Reset audio processing state
       isSpeechDetected = false;
       silenceStart = null;
+      
+      // Update visual state
+      updateVisualState();
     }
     
     function showConnectingOverlay(show) {
@@ -674,6 +738,9 @@
       message = message.trim();
       if (!message || !socket) return;
       
+      // Set processing state
+      isProcessing = true;
+      updateVisualState();
       statusInfo.textContent = "Processing...";
       
       // Create a new messages array starting with the system message if provided
@@ -707,7 +774,11 @@
     
     function speakText(text) {
       // Don't speak if text is empty or just whitespace
-      if (!text || !text.trim()) return;
+      if (!text || !text.trim()) {
+        isProcessing = false;
+        updateVisualState();
+        return;
+      }
       
       // If currently playing, stop it
       if (isSpeaking) {
@@ -737,14 +808,18 @@
       .then(audioBlob => {
         const audioUrl = URL.createObjectURL(audioBlob);
         audioPlayer.src = audioUrl;
+        isProcessing = false;
+        updateVisualState();
         audioPlayer.play();
       })
       .catch(error => {
         console.error('Failed to get Eleven Labs audio:', error);
         statusInfo.textContent = "Error generating speech";
+        isProcessing = false;
+        updateVisualState();
         
         // Start recognition again if it's not running
-        if (isConnected && !isRecording) {
+        if (isConnected && !isRecording && !isSpeaking) {
           startRecognition();
         }
       });
@@ -769,8 +844,8 @@
         // Page is visible again, resume activities if connected
         if (isSpeaking) {
           audioPlayer.play();
-        } else if (!isRecording) {
-          // Restart recognition if not already recording
+        } else if (!isRecording && !isSpeaking) {
+          // Restart recognition if not already recording and not speaking
           startRecognition();
         }
       }
