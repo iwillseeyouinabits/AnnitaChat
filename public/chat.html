@@ -279,7 +279,7 @@
       
       // Update emoji and state based on current state
       if (isSpeaking) {
-        micBtn.textContent = '🔇'; // Muted microphone when AI is speaking
+        micBtn.textContent = '👨🏻‍🦰'; // Muted microphone when AI is speaking
         micBtn.classList.add('speaking');
         micBtn.classList.add('hidden-mic'); // Make mic appear disabled
       } else if (isProcessing) {
@@ -955,7 +955,7 @@ async function restartMicrophone() {
       
       socket.emit('chat', chatRequest);
     }
-    
+
     function handleDisconnection() {
       isConnected = false;
       isProcessing = false;
