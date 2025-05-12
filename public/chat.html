@@ -239,7 +239,7 @@
     let silenceTimer = null;
     let recognitionRestartTimer = null;
     let conversationHistory = [];
-    const MAX_HISTORY_LENGTH = 10;
+    const MAX_HISTORY_LENGTH = 100;
     
     // Navigation back to settings
     backButton.addEventListener('click', () => {
@@ -489,8 +489,15 @@
         
         // Initialize audio processing
         initAudioProcessing().then(() => {
-          // Start speech recognition
-          startRecognition();
+          // Start the conversation with an AI greeting
+          sendInitialGreeting();
+          
+          // Start speech recognition after a delay to allow the greeting to complete
+          setTimeout(() => {
+            if (isConnected && !isSpeaking) {
+              startRecognition();
+            }
+          }, 500);
         }).catch(error => {
           console.error('Error initializing audio:', error);
           statusInfo.textContent = "Error accessing microphone";
@@ -691,6 +698,36 @@
       }
       
       handleDisconnection();
+    }
+    
+    // Send an initial greeting from the AI to start the conversation
+    function sendInitialGreeting() {
+      if (!socket) return;
+      
+      // Set processing state
+      isProcessing = true;
+      updateVisualState();
+      statusInfo.textContent = "AI is starting the conversation...";
+      
+      // Create messages array with system message if provided
+      let messages = [];
+      if (assistantRole) {
+        messages.push({ role: 'system', content: assistantRole });
+      }
+      
+      // Add a system message instructing the AI to greet the user
+      messages.push({ 
+        role: 'system', 
+        content: 'The user has just connected. Greet them with a short, friendly welcome and briefly explain what you can help with. Keep it concise.' 
+      });
+      
+      const chatRequest = {
+        messages: messages,
+        model: 'gpt-3.5-turbo',
+        stream: true
+      };
+      
+      socket.emit('chat', chatRequest);
     }
     
     function handleDisconnection() {
