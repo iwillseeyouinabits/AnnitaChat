@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Assistant Settings</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 20px;
+      background-color: #f9f9f9;
+      color: #333;
+    }
+    
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+    
+    .page-title {
+      font-size: 24px;
+      font-weight: 500;
+      margin-bottom: 20px;
+      text-align: center;
+    }
+    
+    .input-container {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    
+    .setting-group {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .setting-label {
+      font-weight: 500;
+      margin-bottom: 2px;
+    }
+    
+    .setting-description {
+      font-size: 12px;
+      color: #666;
+      margin-top: 2px;
+    }
+    
+    .role-input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 16px;
+      box-sizing: border-box;
+    }
+    
+    .voice-selector {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .voice-selector select {
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #ddd;
+      font-size: 16px;
+      background-color: white;
+    }
+    
+    .slider-container {
+      width: 100%;
+      padding: 5px 0;
+    }
+    
+    .slider {
+      width: 100%;
+      margin: 5px 0;
+    }
+    
+    .slider-value {
+      text-align: center;
+      font-size: 14px;
+      color: #666;
+    }
+    
+    .start-button {
+      background-color: #4285f4;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 24px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 20px;
+      width: 100%;
+      transition: background-color 0.3s;
+    }
+    
+    .start-button:hover {
+      background-color: #3367d6;
+    }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <h1 class="page-title">Voice Assistant Settings</h1>
+    
+    <div class="input-container">
+      <div class="setting-group">
+        <div class="setting-label">Assistant's Role</div>
+        <textarea 
+          class="role-input" 
+          id="roleInput" 
+          placeholder="Enter the AI assistant's role here (e.g., 'You are a helpful assistant that specializes in physics')"
+          rows="3"
+        ></textarea>
+        <div class="setting-description">Defines how the AI will behave and what expertise it should have</div>
+      </div>
+      
+      <div class="setting-group">
+        <div class="setting-label">Voice</div>
+        <div class="voice-selector">
+          <select id="voiceSelect">
+            <option value="21m00Tcm4TlvDq8ikWAM">Rachel (Female)</option>
+            <option value="AZnzlk1XvdvUeBnXmlld">Domi (Female)</option>
+            <option value="EXAVITQu4vr4xnSDxMaL">Bella (Female)</option>
+            <option value="ErXwobaYiN019PkySvjV">Antoni (Male)</option>
+            <option value="MF3mGyEYCl7XYWbV9V6O">Elli (Female)</option>
+            <option value="TxGEqnHWrfWFTfGW9XjX">Josh (Male)</option>
+            <option value="VR6AewLTigWG4xSOukaG">Arnold (Male)</option>
+            <option value="pNInz6obpgDQGcFmaJgB">Adam (Male)</option>
+            <option value="yoZ06aMxZJJ28mfd3POQ">Sam (Male)</option>
+          </select>
+        </div>
+        <div class="setting-description">Select the voice for the AI's responses</div>
+      </div>
+      <div class="setting-group">
+        <div class="setting-label">Noise Threshold</div>
+        <div class="slider-container">
+          <input 
+            type="range" 
+            min="-65" 
+            max="-15" 
+            value="-45" 
+            class="slider" 
+            id="noiseSlider" 
+            step="1"
+          >
+          <div class="slider-value" id="noiseValue">-45 dB</div>
+        </div>
+        <div class="setting-description">Set the minimum volume level to detect speech (lower values pick up quieter sounds)</div>
+      </div>
+    
+    <button id="startButton" class="start-button">Start Conversation</button>
+  </div>
+  <script>
+    // DOM Elements
+    const startButton = document.getElementById('startButton');
+    const roleInput = document.getElementById('roleInput');
+    const voiceSelect = document.getElementById('voiceSelect');
+    const noiseSlider = document.getElementById('noiseSlider');
+    const noiseValue = document.getElementById('noiseValue');
+    
+    // Update noise threshold display
+    noiseSlider.addEventListener('input', () => {
+      const noiseThreshold = parseInt(noiseSlider.value);
+      noiseValue.textContent = noiseThreshold + ' dB';
+    });
+    
+    // Handle form submission
+    startButton.addEventListener('click', () => {
+      // Get values
+      const role = encodeURIComponent(roleInput.value.trim());
+      const voice = encodeURIComponent(voiceSelect.value);
+      const noiseThreshold = noiseSlider.value;
+      
+      // Save to local storage as a backup
+      localStorage.setItem('assistant_role', roleInput.value.trim());
+      localStorage.setItem('assistant_voice', voiceSelect.value);
+      localStorage.setItem('noise_threshold', noiseThreshold);
+      
+      // Create the URL with parameters
+      const url = `chat.html?role=${role}&voice=${voice}&noise=${noiseThreshold}`;
+      
+      // Navigate to the chat page
+      window.location.href = url;
+    });
+    
+    // Load saved values if they exist
+    window.addEventListener('DOMContentLoaded', () => {
+      const savedRole = localStorage.getItem('assistant_role');
+      const savedVoice = localStorage.getItem('assistant_voice');
+      const savedNoise = localStorage.getItem('noise_threshold');
+      
+      if (savedRole) roleInput.value = savedRole;
+      if (savedVoice) voiceSelect.value = savedVoice;
+      if (savedNoise) {
+        noiseSlider.value = savedNoise;
+        noiseValue.textContent = parseInt(savedNoise) + ' dB';
+      }
+    });
+  </script>
+</body>
+</html>
